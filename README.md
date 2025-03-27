@@ -37,7 +37,7 @@ Basic usage to check all TLDs:
 Check a single TLD:
 
 ```bash
-./rdap-stealth-finder --tld ch
+./rdap-stealth-finder --tld li
 ```
 
 With options:
@@ -49,7 +49,7 @@ With options:
 Combine single TLD check with other options:
 
 ```bash
-./rdap-stealth-finder --tld ch -v
+./rdap-stealth-finder --tld li -v
 ```
 
 ### Options
@@ -81,22 +81,39 @@ When checking a single TLD:
 
 Checking all TLDs:
 ```
-=== RDAP Stealth Servers Found ===
-CH: https://rdap.nic.ch
-CO: https://rdap.nic.co
-UK: https://rdap.nominet.uk
-Found 3 stealth RDAP servers
+=== RDAP Server Discovery Summary ===
+Total TLDs: 1443
+Published RDAP servers: 1188
+Stealth RDAP servers: 33
+Unknown RDAP servers: 222
+
+=== Stealth RDAP Servers Found ===
+CL:
+  Host: nic.cl
+  Endpoint: https://nic.cl/rdap/
+NG:
+  Host: rdap.nic.net.ng
+  Endpoint: https://rdap.nic.net.ng/domain/
+XN--H2BREG3EVE:
+  Host: rdap.registry.in
+  Endpoint: https://rdap.registry.in/domain/
+XN--H2BRJ9C:
+  Host: rdap.registry.in
+  Endpoint: https://rdap.registry.in/domain/
 ```
 
 Checking a single TLD (in bootstrap file):
 ```
-TLD COM has known RDAP server(s):
-- https://rdap.verisign.com/com/v1/
+Found published RDAP server(s) for COM:
+- Host: rdap.verisign.com
+  Endpoint: https://rdap.verisign.com/com/v1/
 ```
 
 Checking a single TLD (stealth server):
 ```
-Found stealth RDAP server for CH: https://rdap.nic.ch
+Found stealth RDAP server for LI:
+- Host: rdap.nic.li
+  Endpoint: https://rdap.nic.li/domain/
 ```
 
 Checking a single TLD (no RDAP server):
