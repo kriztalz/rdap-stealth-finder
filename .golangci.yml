@@ -1,0 +1,101 @@
+version: '2'
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - depguard
+    - embeddedstructfieldcheck
+    - errcheck
+    - errname
+    - exhaustive
+    - fatcontext
+    - funcorder
+    - gochecksumtype
+    - goconst
+    - gocritic
+    - gosec
+    - govet
+    - iface
+    - ineffassign
+    - intrange
+    - misspell
+    - modernize
+    - nakedret
+    - noctx
+    - nolintlint
+    - iotamixing
+    - perfsprint
+    - prealloc
+    - staticcheck
+    - unconvert
+    - sloglint
+    - unparam
+    - unused
+    - wastedassign
+
+  settings:
+    depguard:
+      rules:
+        "non-test files":
+          files:
+            - "!$test"
+        "non-main files":
+          files:
+            - "!**/main.go"
+          deny:
+            - pkg: log$
+              desc: Use log/slog instead, see https://go.dev/blog/slog
+    embeddedstructfieldcheck:
+      forbid-mutex: true
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      check:
+        - switch
+        - map
+    funcorder:
+      struct-method: false
+    gocritic:
+      settings:
+        captLocal:
+          paramsOnly: false
+        underef:
+          skipRecvDeref: false
+    gosec:
+      excludes:
+        - G501
+        - G401
+        - G402
+    sloglint:
+      no-global: all
+      context: scope
+      no-mixed-args: false
+      attr-only: true
+      static-msg: true
+      no-raw-keys: false
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1016
+        - -QF1008
+    unparam:
+      check-exported: true
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gofmt:
+      simplify: false
+      rewrite-rules:
+        - pattern: 'interface{}'
+          replacement: 'any'
+        - pattern: 'a[b:len(a)]'
+          replacement: 'a[b:]'
+issues:
+  fix: true

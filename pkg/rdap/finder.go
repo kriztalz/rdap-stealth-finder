@@ -28,20 +28,25 @@ type Finder struct {
 	concurrency    int
 	timeoutSeconds int
 	httpClient     *http.Client
+	logger         *slog.Logger
 }
 
 // NewFinder creates a new finder with the specified concurrency and timeout
-func NewFinder(concurrency, timeoutSeconds int) *Finder {
+func NewFinder(concurrency, timeoutSeconds int, logger *slog.Logger) *Finder {
 	if concurrency <= 0 {
 		concurrency = runtime.NumCPU()
 	}
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 10
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 
 	return &Finder{
 		concurrency:    concurrency,
 		timeoutSeconds: timeoutSeconds,
+		logger:         logger,
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutSeconds) * time.Second,
 			// Configure transport for better performance
@@ -103,7 +108,7 @@ func (f *Finder) CheckKnownRDAPServer(tld string) (bool, []RDAPServer, error) {
 					for _, serverURL := range service[1] {
 						u, err := url.Parse(serverURL)
 						if err != nil {
-							slog.Debug("Error parsing server URL", "url", serverURL, "error", err)
+							f.logger.DebugContext(ctx, "Error parsing server URL", slog.String("url", serverURL), slog.Any("error", err))
 							continue
 						}
 						servers = append(servers, RDAPServer{
@@ -139,15 +144,15 @@ func (f *Finder) FindStealthServers() (map[string]RDAPServer, RDAPStats, error) 
 	defer cancel()
 
 	// Download TLDs list
-	slog.Info("Fetching TLDs list")
+	f.logger.InfoContext(ctx, "Fetching TLDs list")
 	tlds, err := f.fetchTLDs(ctx)
 	if err != nil {
 		return nil, RDAPStats{}, fmt.Errorf("fetching TLDs: %w", err)
 	}
-	slog.Info("Fetched TLDs list", "count", len(tlds))
+	f.logger.InfoContext(ctx, "Fetched TLDs list", slog.Int("count", len(tlds)))
 
 	// Download RDAP bootstrap file
-	slog.Info("Fetching RDAP bootstrap file")
+	f.logger.InfoContext(ctx, "Fetching RDAP bootstrap file")
 	bootstrap, err := f.fetchRDAPBootstrap(ctx)
 	if err != nil {
 		return nil, RDAPStats{}, fmt.Errorf("fetching RDAP bootstrap: %w", err)
@@ -162,7 +167,7 @@ func (f *Finder) FindStealthServers() (map[string]RDAPServer, RDAPStats, error) 
 			}
 		}
 	}
-	slog.Info("Found known RDAP servers", "count", len(knownRDAPTLDs))
+	f.logger.InfoContext(ctx, "Found known RDAP servers", slog.Int("count", len(knownRDAPTLDs)))
 
 	// Find TLDs without known RDAP servers
 	unknownTLDs := make([]string, 0)
@@ -171,7 +176,7 @@ func (f *Finder) FindStealthServers() (map[string]RDAPServer, RDAPStats, error) 
 			unknownTLDs = append(unknownTLDs, tld)
 		}
 	}
-	slog.Info("Found TLDs without known RDAP servers", "count", len(unknownTLDs))
+	f.logger.InfoContext(ctx, "Found TLDs without known RDAP servers", slog.Int("count", len(unknownTLDs)))
 
 	// Discover stealth RDAP servers
 	results := make(map[string]RDAPServer)
@@ -182,7 +187,7 @@ func (f *Finder) FindStealthServers() (map[string]RDAPServer, RDAPStats, error) 
 	tldCh := make(chan string, f.concurrency)
 
 	// Start workers
-	for i := 0; i < f.concurrency; i++ {
+	for range f.concurrency {
 		g.Go(func() error {
 			for tld := range tldCh {
 				select {
@@ -195,10 +200,10 @@ func (f *Finder) FindStealthServers() (map[string]RDAPServer, RDAPStats, error) 
 						resultsMu.Lock()
 						results[tld] = server
 						resultsMu.Unlock()
-						slog.Info("Found stealth RDAP server",
-							"tld", tld,
-							"host", server.Host,
-							"endpoint", server.Endpoint)
+						f.logger.InfoContext(tldCtx, "Found stealth RDAP server",
+							slog.String("tld", tld),
+							slog.String("host", server.Host),
+							slog.String("endpoint", server.Endpoint))
 					}
 					tldCancel()
 				}
@@ -208,11 +213,12 @@ func (f *Finder) FindStealthServers() (map[string]RDAPServer, RDAPStats, error) 
 	}
 
 	// Feed TLDs to workers
+feedLoop:
 	for _, tld := range unknownTLDs {
 		select {
 		case <-ctx.Done():
-			slog.Warn("Context cancelled, stopping TLD processing", "processed", len(results), "remaining", len(unknownTLDs)-len(results))
-			break
+			f.logger.WarnContext(ctx, "Context cancelled, stopping TLD processing", slog.Int("processed", len(results)), slog.Int("remaining", len(unknownTLDs)-len(results)))
+			break feedLoop
 		case tldCh <- tld:
 			// TLD sent to worker
 		}
@@ -221,22 +227,23 @@ func (f *Finder) FindStealthServers() (map[string]RDAPServer, RDAPStats, error) 
 
 	// Wait for all workers to complete
 	if err := g.Wait(); err != nil {
-		if err == context.DeadlineExceeded {
-			slog.Warn("Operation timed out",
-				"processed_tlds", len(results),
-				"total_tlds", len(unknownTLDs),
-				"remaining_tlds", len(unknownTLDs)-len(results))
-		} else if err == context.Canceled {
-			slog.Warn("Operation cancelled",
-				"processed_tlds", len(results),
-				"total_tlds", len(unknownTLDs),
-				"remaining_tlds", len(unknownTLDs)-len(results))
-		} else {
-			slog.Warn("Some workers encountered errors",
-				"error", err,
-				"processed_tlds", len(results),
-				"total_tlds", len(unknownTLDs),
-				"remaining_tlds", len(unknownTLDs)-len(results))
+		switch err {
+		case context.DeadlineExceeded:
+			f.logger.WarnContext(ctx, "Operation timed out",
+				slog.Int("processed_tlds", len(results)),
+				slog.Int("total_tlds", len(unknownTLDs)),
+				slog.Int("remaining_tlds", len(unknownTLDs)-len(results)))
+		case context.Canceled:
+			f.logger.WarnContext(ctx, "Operation cancelled",
+				slog.Int("processed_tlds", len(results)),
+				slog.Int("total_tlds", len(unknownTLDs)),
+				slog.Int("remaining_tlds", len(unknownTLDs)-len(results)))
+		default:
+			f.logger.WarnContext(ctx, "Some workers encountered errors",
+				slog.Any("error", err),
+				slog.Int("processed_tlds", len(results)),
+				slog.Int("total_tlds", len(unknownTLDs)),
+				slog.Int("remaining_tlds", len(unknownTLDs)-len(results)))
 		}
 	}
 
@@ -262,7 +269,11 @@ func (f *Finder) fetchTLDs(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching TLDs: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			f.logger.DebugContext(ctx, "Error closing response body", slog.Any("error", closeErr))
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -297,7 +308,11 @@ func (f *Finder) fetchRDAPBootstrap(ctx context.Context) (*RDAPBootstrap, error)
 	if err != nil {
 		return nil, fmt.Errorf("fetching RDAP bootstrap: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			f.logger.DebugContext(ctx, "Error closing response body", slog.Any("error", closeErr))
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -314,51 +329,53 @@ func (f *Finder) fetchRDAPBootstrap(ctx context.Context) (*RDAPBootstrap, error)
 // checkStealthRDAP attempts to discover a stealth RDAP server for a TLD
 func (f *Finder) checkStealthRDAP(ctx context.Context, tld string) (RDAPServer, bool) {
 	tld = strings.ToLower(tld)
-	slog.Debug("Starting stealth RDAP server discovery", "tld", tld)
+	f.logger.DebugContext(ctx, "Starting stealth RDAP server discovery", slog.String("tld", tld))
 
 	// First, try to get information from IANA's RDAP server
 	ianaURL := fmt.Sprintf(ianaRDAPURL, tld)
-	slog.Debug("Querying IANA RDAP server", "url", ianaURL)
+	f.logger.DebugContext(ctx, "Querying IANA RDAP server", slog.String("url", ianaURL))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ianaURL, nil)
 	if err != nil {
-		slog.Debug("Error creating IANA request", "tld", tld, "error", err)
+		f.logger.DebugContext(ctx, "Error creating IANA request", slog.String("tld", tld), slog.Any("error", err))
 		return RDAPServer{}, false
 	}
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		slog.Debug("Error fetching from IANA", "tld", tld, "error", err)
+		f.logger.DebugContext(ctx, "Error fetching from IANA", slog.String("tld", tld), slog.Any("error", err))
 		return RDAPServer{}, false
 	}
 
 	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		f.logger.DebugContext(ctx, "Error closing IANA response body", slog.String("tld", tld), slog.Any("error", closeErr))
+	}
 	if err != nil {
-		slog.Debug("Error reading IANA response body", "tld", tld, "error", err)
+		f.logger.DebugContext(ctx, "Error reading IANA response body", slog.String("tld", tld), slog.Any("error", err))
 		return RDAPServer{}, false
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Debug("Unexpected status code from IANA", "tld", tld, "status", resp.StatusCode)
+		f.logger.DebugContext(ctx, "Unexpected status code from IANA", slog.String("tld", tld), slog.Int("status", resp.StatusCode))
 		return RDAPServer{}, false
 	}
 
-	slog.Debug("Received IANA response", "tld", tld, "status", resp.StatusCode)
+	f.logger.DebugContext(ctx, "Received IANA response", slog.String("tld", tld), slog.Int("status", resp.StatusCode))
 
 	// Look for port43 in the response
 	var ianaResp IANAResponse
 	if err := json.Unmarshal(body, &ianaResp); err != nil {
-		slog.Debug("Error unmarshaling IANA response", "tld", tld, "error", err)
+		f.logger.DebugContext(ctx, "Error unmarshaling IANA response", slog.String("tld", tld), slog.Any("error", err))
 		return RDAPServer{}, false
 	}
 
 	if ianaResp.Port43 == "" {
-		slog.Debug("No port43 in IANA response", "tld", tld)
+		f.logger.DebugContext(ctx, "No port43 in IANA response", slog.String("tld", tld))
 		return RDAPServer{}, false
 	}
 
-	slog.Debug("Found port43 in IANA response", "tld", tld, "port43", ianaResp.Port43)
+	f.logger.DebugContext(ctx, "Found port43 in IANA response", slog.String("tld", tld), slog.String("port43", ianaResp.Port43))
 
 	// Try common patterns for RDAP servers
 	potentialURLs := []string{
@@ -367,9 +384,9 @@ func (f *Finder) checkStealthRDAP(ctx context.Context, tld string) (RDAPServer, 
 		// Try with nic.tld
 		fmt.Sprintf("https://rdap.nic.%s/domain/example.%s", tld, tld),
 		// Try without domain path
-		fmt.Sprintf("https://%s", strings.Replace(ianaResp.Port43, "whois.", "rdap.", 1)),
+		"https://" + strings.Replace(ianaResp.Port43, "whois.", "rdap.", 1),
 		// Try without domain path but with nic.tld
-		fmt.Sprintf("https://rdap.nic.%s", tld),
+		"https://rdap.nic." + tld,
 		// Try registry/domain path with nic.tld
 		fmt.Sprintf("https://rdap.nic.%s/registry/domain/example.%s", tld, tld),
 		// Try registry/domain path with nic.tld (without example)
@@ -390,30 +407,31 @@ func (f *Finder) checkStealthRDAP(ctx context.Context, tld string) (RDAPServer, 
 		fmt.Sprintf("https://rdap.nic.%s/api/%s", tld, tld),
 	}
 
-	slog.Debug("Generated potential RDAP URLs", "tld", tld, "urls", potentialURLs)
+	f.logger.DebugContext(ctx, "Generated potential RDAP URLs", slog.String("tld", tld), slog.Any("urls", potentialURLs))
 
 	// Check each potential URL
 	for _, urlStr := range potentialURLs {
-		slog.Debug("Checking potential RDAP URL", "tld", tld, "url", urlStr)
+		f.logger.DebugContext(ctx, "Checking potential RDAP URL", slog.String("tld", tld), slog.String("url", urlStr))
 		if f.isRDAPServer(ctx, urlStr) {
 			// Extract the base URL and host
 			u, err := url.Parse(urlStr)
 			if err != nil {
-				slog.Debug("Error parsing URL", "url", urlStr, "error", err)
+				f.logger.DebugContext(ctx, "Error parsing URL", slog.String("url", urlStr), slog.Any("error", err))
 				continue
 			}
 
 			// Extract the endpoint path
 			endpoint := urlStr
-			if strings.Contains(urlStr, "/domain/") {
+			switch {
+			case strings.Contains(urlStr, "/domain/"):
 				endpoint = urlStr[:strings.Index(urlStr, "/domain/")+len("/domain/")]
-			} else if strings.Contains(urlStr, "/registry/") {
+			case strings.Contains(urlStr, "/registry/"):
 				endpoint = urlStr[:strings.Index(urlStr, "/registry/")+len("/registry/")]
-			} else if strings.Contains(urlStr, "/rdap/") {
+			case strings.Contains(urlStr, "/rdap/"):
 				endpoint = urlStr[:strings.Index(urlStr, "/rdap/")+len("/rdap/")]
-			} else if strings.Contains(urlStr, "/v1/") {
+			case strings.Contains(urlStr, "/v1/"):
 				endpoint = urlStr[:strings.Index(urlStr, "/v1/")+len("/v1/")]
-			} else if strings.Contains(urlStr, "/dbs/") {
+			case strings.Contains(urlStr, "/dbs/"):
 				endpoint = urlStr[:strings.Index(urlStr, "/dbs/")+len("/dbs/")]
 			}
 
@@ -422,73 +440,77 @@ func (f *Finder) checkStealthRDAP(ctx context.Context, tld string) (RDAPServer, 
 				Endpoint: endpoint,
 			}
 
-			slog.Debug("Found valid RDAP server",
-				"tld", tld,
-				"host", server.Host,
-				"endpoint", server.Endpoint)
+			f.logger.DebugContext(ctx, "Found valid RDAP server",
+				slog.String("tld", tld),
+				slog.String("host", server.Host),
+				slog.String("endpoint", server.Endpoint))
 			return server, true
 		}
 	}
 
-	slog.Debug("No valid RDAP server found for any potential URL", "tld", tld)
+	f.logger.DebugContext(ctx, "No valid RDAP server found for any potential URL", slog.String("tld", tld))
 	return RDAPServer{}, false
 }
 
 // isRDAPServer checks if a URL is an RDAP server
 func (f *Finder) isRDAPServer(ctx context.Context, url string) bool {
-	slog.Debug("Validating potential RDAP server", "url", url)
+	f.logger.DebugContext(ctx, "Validating potential RDAP server", slog.String("url", url))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		slog.Debug("Error creating validation request", "url", url, "error", err)
+		f.logger.DebugContext(ctx, "Error creating validation request", slog.String("url", url), slog.Any("error", err))
 		return false
 	}
 	req.Header.Set("Accept", "application/rdap+json")
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
-		slog.Debug("Error during RDAP server validation", "url", url, "error", err)
+		f.logger.DebugContext(ctx, "Error during RDAP server validation", slog.String("url", url), slog.Any("error", err))
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			f.logger.DebugContext(ctx, "Error closing response body", slog.String("url", url), slog.Any("error", closeErr))
+		}
+	}()
 
-	slog.Debug("Received response from potential RDAP server",
-		"url", url,
-		"status", resp.StatusCode,
-		"content_type", resp.Header.Get("Content-Type"))
+	f.logger.DebugContext(ctx, "Received response from potential RDAP server",
+		slog.String("url", url),
+		slog.Int("status", resp.StatusCode),
+		slog.String("content_type", resp.Header.Get("Content-Type")))
 
 	// Check if the response has the correct content type
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "application/rdap+json") &&
 		!strings.Contains(contentType, "application/json") {
-		slog.Debug("Invalid content type for RDAP server",
-			"url", url,
-			"content_type", contentType)
+		f.logger.DebugContext(ctx, "Invalid content type for RDAP server",
+			slog.String("url", url),
+			slog.String("content_type", contentType))
 		return false
 	}
 
 	// Read the response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		slog.Debug("Error reading RDAP server response", "url", url, "error", err)
+		f.logger.DebugContext(ctx, "Error reading RDAP server response", slog.String("url", url), slog.Any("error", err))
 		return false
 	}
 
 	// Check if the response is a valid RDAP response
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(body, &data); err != nil {
-		slog.Debug("Error unmarshaling RDAP response", "url", url, "error", err)
+		f.logger.DebugContext(ctx, "Error unmarshaling RDAP response", slog.String("url", url), slog.Any("error", err))
 		return false
 	}
 
 	// Check for RDAP conformance
-	if conformance, ok := data["rdapConformance"].([]interface{}); ok && len(conformance) > 0 {
-		slog.Debug("Found valid RDAP conformance",
-			"url", url,
-			"conformance", conformance)
+	if conformance, ok := data["rdapConformance"].([]any); ok && len(conformance) > 0 {
+		f.logger.DebugContext(ctx, "Found valid RDAP conformance",
+			slog.String("url", url),
+			slog.Any("conformance", conformance))
 		return true
 	}
 
-	slog.Debug("No RDAP conformance found in response", "url", url)
+	f.logger.DebugContext(ctx, "No RDAP conformance found in response", slog.String("url", url))
 	return false
 }

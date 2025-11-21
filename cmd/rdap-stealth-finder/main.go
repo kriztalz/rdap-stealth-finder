@@ -41,7 +41,7 @@ then attempts to discover hidden RDAP servers using common patterns.`,
 			}))
 			slog.SetDefault(logger)
 
-			finder := rdap.NewFinder(concurrency, timeoutSeconds)
+			finder := rdap.NewFinder(concurrency, timeoutSeconds, logger)
 
 			// Check if a single TLD was specified
 			if singleTLD != "" {

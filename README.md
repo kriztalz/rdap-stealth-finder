@@ -16,7 +16,7 @@ This tool attempts to discover these stealth RDAP servers by:
 
 ### Prerequisites
 
-- Go 1.24.0 or later
+- Go 1.25.4 or later
 
 ### Installing from source
 
@@ -64,12 +64,14 @@ Combine single TLD check with other options:
 The tool follows these steps:
 
 When checking all TLDs:
+
 1. Fetches the list of all TLDs from `https://data.iana.org/TLD/tlds-alpha-by-domain.txt`
 2. Fetches the RDAP bootstrap file from `https://data.iana.org/rdap/dns.json`
 3. Identifies TLDs that don't have a published RDAP server in the bootstrap file
 4. For each of these TLDs, attempts to discover a stealth RDAP server
 
 When checking a single TLD:
+
 1. First checks if the TLD has a known RDAP server in the bootstrap file
 2. If not found in the bootstrap file, attempts to discover a stealth RDAP server by:
    - Querying the IANA RDAP server for information about the TLD
@@ -80,6 +82,7 @@ When checking a single TLD:
 ## Example Output
 
 Checking all TLDs:
+
 ```
 === RDAP Server Discovery Summary ===
 Total TLDs: 1443
@@ -103,6 +106,7 @@ XN--H2BRJ9C:
 ```
 
 Checking a single TLD (in bootstrap file):
+
 ```
 Found published RDAP server(s) for COM:
 - Host: rdap.verisign.com
@@ -110,6 +114,7 @@ Found published RDAP server(s) for COM:
 ```
 
 Checking a single TLD (stealth server):
+
 ```
 Found stealth RDAP server for LI:
 - Host: rdap.nic.li
@@ -117,6 +122,7 @@ Found stealth RDAP server for LI:
 ```
 
 Checking a single TLD (no RDAP server):
+
 ```
 No RDAP server found for XYZ
 ```
@@ -139,4 +145,4 @@ Please use this tool responsibly. Respect rate limits and be mindful that:
 
 ## License
 
-MIT License 
+MIT License
