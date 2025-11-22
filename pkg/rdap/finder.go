@@ -59,11 +59,6 @@ func NewFinder(concurrency, timeoutSeconds int, logger *slog.Logger) *Finder {
 	}
 }
 
-// IANAResponse represents the response from RDAP IANA server
-type IANAResponse struct {
-	Port43 string `json:"port43,omitempty"`
-}
-
 // RDAPBootstrap represents the RDAP bootstrap file
 type RDAPBootstrap struct {
 	Description string       `json:"description"`
@@ -346,45 +341,23 @@ func (f *Finder) checkStealthRDAP(ctx context.Context, tld string) (RDAPServer, 
 		f.logger.DebugContext(ctx, "Error fetching from IANA", slog.String("tld", tld), slog.Any("error", err))
 		return RDAPServer{}, false
 	}
-
-	body, err := io.ReadAll(resp.Body)
-	if closeErr := resp.Body.Close(); closeErr != nil {
-		f.logger.DebugContext(ctx, "Error closing IANA response body", slog.String("tld", tld), slog.Any("error", closeErr))
-	}
-	if err != nil {
-		f.logger.DebugContext(ctx, "Error reading IANA response body", slog.String("tld", tld), slog.Any("error", err))
-		return RDAPServer{}, false
-	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			f.logger.DebugContext(ctx, "Error closing IANA response body", slog.String("tld", tld), slog.Any("error", closeErr))
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		f.logger.DebugContext(ctx, "Unexpected status code from IANA", slog.String("tld", tld), slog.Int("status", resp.StatusCode))
 		return RDAPServer{}, false
 	}
 
-	f.logger.DebugContext(ctx, "Received IANA response", slog.String("tld", tld), slog.Int("status", resp.StatusCode))
+	f.logger.DebugContext(ctx, "Received IANA response for TLD", slog.String("tld", tld), slog.Int("status", resp.StatusCode))
 
-	// Look for port43 in the response
-	var ianaResp IANAResponse
-	if err := json.Unmarshal(body, &ianaResp); err != nil {
-		f.logger.DebugContext(ctx, "Error unmarshaling IANA response", slog.String("tld", tld), slog.Any("error", err))
-		return RDAPServer{}, false
-	}
-
-	if ianaResp.Port43 == "" {
-		f.logger.DebugContext(ctx, "No port43 in IANA response", slog.String("tld", tld))
-		return RDAPServer{}, false
-	}
-
-	f.logger.DebugContext(ctx, "Found port43 in IANA response", slog.String("tld", tld), slog.String("port43", ianaResp.Port43))
-
-	// Try common patterns for RDAP servers
+	// Try common RDAP URL patterns based on TLD (port43 is no longer in bootstrap)
 	potentialURLs := []string{
-		// Replace whois. with rdap.
-		fmt.Sprintf("https://%s/domain/example.%s", strings.Replace(ianaResp.Port43, "whois.", "rdap.", 1), tld),
 		// Try with nic.tld
 		fmt.Sprintf("https://rdap.nic.%s/domain/example.%s", tld, tld),
-		// Try without domain path
-		"https://" + strings.Replace(ianaResp.Port43, "whois.", "rdap.", 1),
 		// Try without domain path but with nic.tld
 		"https://rdap.nic." + tld,
 		// Try registry/domain path with nic.tld

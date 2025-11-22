@@ -54,7 +54,7 @@ Combine single TLD check with other options:
 
 ### Options
 
-- `--tld`: Check a specific TLD (e.g., 'ch', 'co', or 'in')
+- `--tld`: Check a specific TLD (e.g., 'es', 'com', or 'in')
 - `-c, --concurrency`: Number of concurrent workers (default: 10)
 - `-t, --timeout`: HTTP request timeout in seconds (default: 10)
 - `-v, --verbose`: Enable verbose logging
@@ -75,7 +75,6 @@ When checking a single TLD:
 1. First checks if the TLD has a known RDAP server in the bootstrap file
 2. If not found in the bootstrap file, attempts to discover a stealth RDAP server by:
    - Querying the IANA RDAP server for information about the TLD
-   - Extracting the `port43` field (typically containing a WHOIS server address)
    - Constructing potential RDAP server URLs based on common patterns
    - Testing each URL to see if it's a valid RDAP server
 
